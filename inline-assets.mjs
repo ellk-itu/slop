@@ -23,8 +23,8 @@ function inlineAssets() {
     return match;
   });
 
-  // Collect all JS files and create a map
-  const jsFileMap = new Map();
+  // Collect all JS files
+  const jsFiles = [];
   function collectJsFiles(dir) {
     const files = fs.readdirSync(dir);
     for (const file of files) {
@@ -33,9 +33,16 @@ function inlineAssets() {
       if (stat.isDirectory()) {
         collectJsFiles(filePath);
       } else if (file.endsWith('.js')) {
-        const content = fs.readFileSync(filePath, 'utf-8');
+        let content = fs.readFileSync(filePath, 'utf-8');
+        
+        // Replace import() calls within the module code
+        content = content.replace(/import\("([^"]+)"\)/g, 'window.importModule("$1")');
+        
         const relativePath = path.relative(buildDir, filePath).replace(/\\/g, '/');
-        jsFileMap.set('/' + relativePath, content);
+        jsFiles.push({
+          path: '/' + relativePath,
+          content: content
+        });
       }
     }
   }
@@ -45,35 +52,57 @@ function inlineAssets() {
     collectJsFiles(appDir);
   }
 
-  // Create module map as JSON in the page
-  let moduleMapScript = `<script>
-window.__moduleMap = new Map([
+  // Create a module system using base64 encoding
+  let moduleScript = `<script>
+  const moduleCache = new Map();
+  
+  // Decode base64
+  function base64Decode(str) {
+    return decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+  }
+  
+  // Module map (path -> base64-encoded code)
+  const moduleMap = new Map([
 `;
-  
-  for (const [key, value] of jsFileMap) {
-    // Escape the content for JSON
-    const escaped = JSON.stringify(value);
-    moduleMapScript += `  ['${key}', ${escaped}],\n`;
-  }
-  
-  moduleMapScript += `]);
 
-// Override import() to load from module map
-const originalImport = window.import || function() {};
-window.import = async function(specifier) {
-  const content = window.__moduleMap.get(specifier);
-  if (content) {
-    const module = { exports: {} };
-    const func = new Function('module', 'exports', content);
-    func(module, module.exports);
-    return module.exports;
+  for (const file of jsFiles) {
+    const encoded = Buffer.from(file.content, 'utf-8').toString('base64');
+    moduleScript += `    ['${file.path}', '${encoded}'],\n`;
   }
-  throw new Error('Module not found: ' + specifier);
-};
+
+  moduleScript += `  ]);
+  
+  // Create a simple module loader
+  async function loadModule(id) {
+    if (moduleCache.has(id)) {
+      return moduleCache.get(id);
+    }
+    
+    const encoded = moduleMap.get(id);
+    if (!encoded) {
+      throw new Error('Module not found: ' + id);
+    }
+    
+    const code = base64Decode(encoded);
+    const moduleObj = { exports: {} };
+    
+    // Create a function that executes the module code
+    const func = new Function('module', 'exports', 'require', '__dirname', '__filename', code);
+    func(moduleObj, moduleObj.exports, loadModule, '', id);
+    
+    moduleCache.set(id, moduleObj.exports);
+    return moduleObj.exports;
+  }
+  
+  // Set up global import module function
+  window.importModule = loadModule;
 </script>`;
 
-  // Insert before the closing head tag
-  html = html.replace('</head>', moduleMapScript + '\n</head>');
+  // Replace remaining import() calls in the HTML script tags (not inside function strings)
+  html = html.replace(/import\("([^"]+)"\)(?=\s*\.then)/g, 'window.importModule("$1")');
+
+  // Insert module script before closing head tag
+  html = html.replace('</head>', moduleScript + '\n</head>');
 
   // Remove modulepreload links
   html = html.replace(/<link[^>]*rel="modulepreload"[^>]*>/g, '');
