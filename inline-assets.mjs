@@ -25,62 +25,28 @@ function rewriteImportsToAbsolute(modulePath, moduleContent) {
     }
   );
   
-  // Handle: import("./file") or import(`./file`) with or without trailing args - replace with __loadModule
+  // Comprehensive import() replacement - handles all quote types and trailing chars in one pass
+  // This matches: import("path"), import(`path`), import('path'), etc.
   rewritten = rewritten.replace(
-    /import\s*\(\s*['"`](\.[^'"`]+)['"`]\s*(?:,|\.|\s*\))/g,
-    (match, relPath) => {
-      const absPath = resolveRelativePath(modulePath, relPath);
-      // Keep the trailing character (comma, dot, or close paren)
-      const trailing = match[match.length - 1];
-      return `__loadModule("${absPath}")${trailing}`;
-    }
-  );
-  
-  // Also replace absolute path imports with __loadModule to ensure consistency
-  // Handle: import("/_app/...") - with or without trailing args
-  rewritten = rewritten.replace(
-    /import\s*\(\s*["'](\/_app\/[^"']+)["']\s*(?:,|\.|\s*\))/g,
-    (match, absPath) => {
-      // Keep the trailing character
-      const trailing = match[match.length - 1];
-      return `__loadModule("${absPath}")${trailing}`;
-    }
-  );
-  
-  // Also handle backtick imports with potential method calls: import(`...`).then
-  rewritten = rewritten.replace(
-    /import\s*\(\s*["`](\/?_?app\/[^"`]+)["`]\s*\)/g,
-    (match, absPath) => {
-      return `__loadModule("${absPath.startsWith('/_app') ? absPath : '/' + absPath}")`;
+    /import\s*\(\s*([`"'])([^`"']*?)\1\s*\)/g,
+    (match, quote, path) => {
+      // Handle relative paths - convert to absolute
+      if (path.startsWith('.')) {
+        const absPath = resolveRelativePath(modulePath, path);
+        return `__loadModule("${absPath}")`;
+      }
+      // Handle absolute paths - replace with __loadModule
+      if (path.startsWith('/_app')) {
+        return `__loadModule("${path}")`;
+      }
+      // Keep other imports as-is (e.g., external dependencies)
+      return match;
     }
   );
   
   // Handle Vite's __vite__mapDeps array: ["../chunks/file.js", "./other.js", ...]
   // This array appears in strings like: d=(m.f||(m.f=["../chunks/A.js","./B.js"]))
-  rewritten = rewritten.replace(
-    /\["([^"]*(?:\.\.[^"]*)?[^"]*)"\]/g,
-    (match, pathStr) => {
-      // Only process if it contains ../ or ./
-      if (!pathStr.includes('..') && !pathStr.includes('.')) {
-        return match;
-      }
-      
-      // Split by comma if it's a list
-      if (pathStr.includes('","')) {
-        // This is part of a larger array, don't modify individual quoted strings here
-        return match;
-      }
-      
-      if (pathStr.startsWith('.') || pathStr.startsWith('..')) {
-        const absPath = resolveRelativePath(modulePath, pathStr);
-        return `["${absPath}"]`;
-      }
-      return match;
-    }
-  );
-  
   // Also handle the array inside: (m.f||(m.f=["../chunks/file.js","./file.js"]))
-  // Need to split the array and rewrite each path
   rewritten = rewritten.replace(
     /m\.f=\[(.*?)\]/g,
     (match, arrayContent) => {
@@ -98,15 +64,6 @@ function rewriteImportsToAbsolute(modulePath, moduleContent) {
       });
       
       return `m.f=[${rewrittenPaths.join(',')}]`;
-    }
-  );
-  
-  // Final catch-all: replace ANY remaining import() calls with absolute /_app paths
-  // This ensures we don't miss any pattern, including those with spaces or other variations
-  rewritten = rewritten.replace(
-    /import\s*\(\s*([`"'])(\/_app\/[^`"']*)\1/g,
-    (match, quote, path) => {
-      return `__loadModule("${path}"`;
     }
   );
   
@@ -182,21 +139,16 @@ function inlineAssets() {
     
     // Custom import loader that returns module objects from data URLs
     async function __loadModule(specifier) {
-      console.log('__loadModule called with:', specifier);
-      
       if (window.__moduleCache[specifier]) {
-        console.log('  -> Returned from cache');
         return window.__moduleCache[specifier];
       }
       
       const dataUrl = window.__moduleMap[specifier];
       if (!dataUrl) {
-        console.log('  -> NOT in moduleMap, falling back to native import');
-        console.log('  -> Available modules:', Object.keys(window.__moduleMap).join(', '));
+        // Fallback to native import
         return import(specifier);
       }
       
-      console.log('  -> Found data URL, importing...');
       const module = await import(dataUrl);
       window.__moduleCache[specifier] = module;
       return module;
