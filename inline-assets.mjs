@@ -6,6 +6,83 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const buildDir = path.join(__dirname, 'build');
 const indexPath = path.join(buildDir, 'index.html');
 
+function resolveRelativePath(basePath, relPath) {
+  const baseDir = path.dirname(basePath);
+  const resolved = path.normalize(path.join(baseDir, relPath));
+  return '/' + resolved.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function rewriteImportsToAbsolute(modulePath, moduleContent) {
+  // Rewrite relative imports to absolute paths
+  let rewritten = moduleContent;
+  
+  // Handle: from "./file" or from './file' or from `./file`
+  rewritten = rewritten.replace(
+    /from\s*(['"`])(\.[^'"`]+)\1/g,
+    (match, quote, relPath) => {
+      const absPath = resolveRelativePath(modulePath, relPath);
+      return `from${quote}${absPath}${quote}`;
+    }
+  );
+  
+  // Handle: import("./file") or import(`./file`)
+  rewritten = rewritten.replace(
+    /import\s*\(\s*['"`](\.[^'"`]+)['"`]\s*\)/g,
+    (match, relPath) => {
+      const absPath = resolveRelativePath(modulePath, relPath);
+      return `import("${absPath}")`;
+    }
+  );
+  
+  // Handle Vite's __vite__mapDeps array: ["../chunks/file.js", "./other.js", ...]
+  // This array appears in strings like: d=(m.f||(m.f=["../chunks/A.js","./B.js"]))
+  rewritten = rewritten.replace(
+    /\["([^"]*(?:\.\.[^"]*)?[^"]*)"\]/g,
+    (match, pathStr) => {
+      // Only process if it contains ../ or ./
+      if (!pathStr.includes('..') && !pathStr.includes('.')) {
+        return match;
+      }
+      
+      // Split by comma if it's a list
+      if (pathStr.includes('","')) {
+        // This is part of a larger array, don't modify individual quoted strings here
+        return match;
+      }
+      
+      if (pathStr.startsWith('.') || pathStr.startsWith('..')) {
+        const absPath = resolveRelativePath(modulePath, pathStr);
+        return `["${absPath}"]`;
+      }
+      return match;
+    }
+  );
+  
+  // Also handle the array inside: (m.f||(m.f=["../chunks/file.js","./file.js"]))
+  // Need to split the array and rewrite each path
+  rewritten = rewritten.replace(
+    /m\.f=\[(.*?)\]/g,
+    (match, arrayContent) => {
+      // Parse individual paths from the array
+      const paths = arrayContent.match(/["'`][^"'`]*["'`]/g) || [];
+      const rewrittenPaths = paths.map(pathQuoted => {
+        const quote = pathQuoted[0];
+        const path = pathQuoted.slice(1, -1);
+        
+        if (path.startsWith('.') || path.startsWith('..')) {
+          const absPath = resolveRelativePath(modulePath, path);
+          return `${quote}${absPath}${quote}`;
+        }
+        return pathQuoted;
+      });
+      
+      return `m.f=[${rewrittenPaths.join(',')}]`;
+    }
+  );
+  
+  return rewritten;
+}
+
 function inlineAssets() {
   console.log('Inlining assets into single HTML file...');
 
@@ -31,15 +108,37 @@ function inlineAssets() {
     referencedFiles.add(match[1]);
   }
 
-  // Create a module map for all referenced files
+  // Collect all JS files from _app directory for complete module map
+  const allModules = new Set(referencedFiles);
+  const appDir = path.join(buildDir, '_app');
+  if (fs.existsSync(appDir)) {
+    function collectModules(dir) {
+      const files = fs.readdirSync(dir);
+      for (const file of files) {
+        const filePath = path.join(dir, file);
+        const stat = fs.statSync(filePath);
+        if (stat.isDirectory()) {
+          collectModules(filePath);
+        } else if (file.endsWith('.js')) {
+          const relativePath = path.relative(buildDir, filePath).replace(/\\/g, '/');
+          allModules.add('/' + relativePath);
+        }
+      }
+    }
+    collectModules(appDir);
+  }
+
+  // Create a module map with rewritten imports
   let moduleMap = {};
-  for (const filePath of referencedFiles) {
-    const cleanPath = filePath.startsWith('/') ? filePath.slice(1) : filePath;
+  for (const modulePath of allModules) {
+    const cleanPath = modulePath.startsWith('/') ? modulePath.slice(1) : modulePath;
     const fullPath = path.join(buildDir, cleanPath);
     if (fs.existsSync(fullPath)) {
-      const content = fs.readFileSync(fullPath, 'utf-8');
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      // Rewrite relative imports to absolute paths
+      content = rewriteImportsToAbsolute(modulePath, content);
       const encoded = Buffer.from(content).toString('base64');
-      moduleMap[filePath] = `data:application/javascript;base64,${encoded}`;
+      moduleMap[modulePath] = `data:application/javascript;base64,${encoded}`;
     }
   }
 
@@ -82,7 +181,6 @@ function inlineAssets() {
   fs.writeFileSync(indexPath, html, 'utf-8');
 
   // Remove _app directory since everything is inlined
-  const appDir = path.join(buildDir, '_app');
   if (fs.existsSync(appDir)) {
     fs.rmSync(appDir, { recursive: true, force: true });
     console.log('✓ All _app files inlined into page (directory removed)');
