@@ -20,5 +20,13 @@ export default defineConfig({
 				entries: ['/']
 			}
 		})
-	]
+	],
+	build: {
+		rollupOptions: {
+			output: {
+				// Disable code splitting - bundle everything into one file
+				manualChunks: undefined
+			}
+		}
+	}
 });
