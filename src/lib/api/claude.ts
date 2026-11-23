@@ -1,10 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({
-  apiKey: import.meta.env.VITE_ANTHROPIC_API_KEY,
-  dangerouslyAllowBrowser: true,
-});
-
 export interface LectureResponse {
   title: string;
   content: string;
@@ -33,9 +28,15 @@ export type ProgressCallback = (data: {
 }) => void;
 
 export async function generateLecture(
+  apiKey: string,
   topic: string,
   onProgress?: ProgressCallback,
 ): Promise<LectureResponse> {
+  const client = new Anthropic({
+    apiKey,
+    dangerouslyAllowBrowser: true,
+  });
+
   let responseText = "";
 
   const stream = await client.messages.create({
@@ -98,10 +99,16 @@ Be concise and informative.`,
 }
 
 export async function generateQuiz(
+  apiKey: string,
   topic: string,
   lectureContent: string,
   onProgress?: ProgressCallback,
 ): Promise<QuizResponse> {
+  const client = new Anthropic({
+    apiKey,
+    dangerouslyAllowBrowser: true,
+  });
+
   let responseText = "";
 
   const stream = await client.messages.create({
@@ -160,6 +167,7 @@ Each correctAnswer is 0-3. Test key concepts.`,
 }
 
 export async function evaluateAnswers(
+  apiKey: string,
   topic: string,
   lectureContent: string,
   answers: {
@@ -169,6 +177,11 @@ export async function evaluateAnswers(
   }[],
   onProgress?: ProgressCallback,
 ): Promise<EvaluationResponse> {
+  const client = new Anthropic({
+    apiKey,
+    dangerouslyAllowBrowser: true,
+  });
+
   const correctCount = answers.filter(
     (a) => a.selectedAnswer === a.correctAnswer,
   ).length;

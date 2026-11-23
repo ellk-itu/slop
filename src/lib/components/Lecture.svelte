@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { learningStore, setPhase, setLoading, setError, setQuiz, clearProgress, appendThinking, appendResponseText } from '#lib/stores/learning';
+	import { apiKeyStore } from '#lib/stores/apiKey';
 	import { generateQuiz } from '#lib/api/claude';
 	import ThinkingDisplay from './ThinkingDisplay.svelte';
 
@@ -14,7 +15,7 @@
 		clearProgress();
 
 		try {
-			const quiz = await generateQuiz($learningStore.topic, $learningStore.lecture.content, (data) => {
+			const quiz = await generateQuiz($apiKeyStore.key, $learningStore.topic, $learningStore.lecture.content, (data) => {
 				if (data.type === 'thinking') {
 					appendThinking(data.content);
 				} else if (data.type === 'text') {

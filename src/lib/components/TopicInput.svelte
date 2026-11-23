@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { learningStore, setTopic, setPhase, setLoading, setError, setLecture, clearProgress, appendThinking, appendResponseText } from '#lib/stores/learning';
+	import { apiKeyStore } from '#lib/stores/apiKey';
 	import { generateLecture } from '#lib/api/claude';
 	import ThinkingDisplay from './ThinkingDisplay.svelte';
 
@@ -18,7 +19,7 @@
 
 		try {
 			setTopic(topic);
-			const lecture = await generateLecture(topic, (data) => {
+			const lecture = await generateLecture($apiKeyStore.key, topic, (data) => {
 				if (data.type === 'thinking') {
 					appendThinking(data.content);
 				} else if (data.type === 'text') {

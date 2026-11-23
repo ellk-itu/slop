@@ -10,6 +10,7 @@
         appendThinking,
         appendResponseText,
     } from "#lib/stores/learning";
+    import { apiKeyStore } from "#lib/stores/apiKey";
     import { evaluateAnswers } from "#lib/api/claude";
     import ThinkingDisplay from "./ThinkingDisplay.svelte";
 
@@ -47,6 +48,7 @@
             }));
 
             const evaluation = await evaluateAnswers(
+                $apiKeyStore.key,
                 $learningStore.topic,
                 $learningStore.lecture?.content || "",
                 answers,
