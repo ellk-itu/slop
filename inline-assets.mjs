@@ -33,11 +33,7 @@ function inlineAssets() {
       if (stat.isDirectory()) {
         collectJsFiles(filePath);
       } else if (file.endsWith('.js')) {
-        let content = fs.readFileSync(filePath, 'utf-8');
-        
-        // Replace import() calls within the module code
-        content = content.replace(/import\("([^"]+)"\)/g, 'window.importModule("$1")');
-        
+        const content = fs.readFileSync(filePath, 'utf-8');
         const relativePath = path.relative(buildDir, filePath).replace(/\\/g, '/');
         jsFiles.push({
           path: '/' + relativePath,
@@ -52,7 +48,7 @@ function inlineAssets() {
     collectJsFiles(appDir);
   }
 
-  // Create a module system using base64 encoding
+  // Create a module system using base64 encoding with blob URLs
   let moduleScript = `<script>
   const moduleCache = new Map();
   
@@ -72,7 +68,7 @@ function inlineAssets() {
 
   moduleScript += `  ]);
   
-  // Create a simple module loader
+  // Create a module loader using blob URLs
   async function loadModule(id) {
     if (moduleCache.has(id)) {
       return moduleCache.get(id);
@@ -84,22 +80,24 @@ function inlineAssets() {
     }
     
     const code = base64Decode(encoded);
-    const moduleObj = { exports: {} };
+    const blob = new Blob([code], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
     
-    // Create a function that executes the module code
-    const func = new Function('module', 'exports', 'require', '__dirname', '__filename', code);
-    func(moduleObj, moduleObj.exports, loadModule, '', id);
-    
-    moduleCache.set(id, moduleObj.exports);
-    return moduleObj.exports;
+    try {
+      const module = await import(url);
+      moduleCache.set(id, module);
+      return module;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
   
   // Set up global import module function
   window.importModule = loadModule;
 </script>`;
 
-  // Replace remaining import() calls in the HTML script tags (not inside function strings)
-  html = html.replace(/import\("([^"]+)"\)(?=\s*\.then)/g, 'window.importModule("$1")');
+  // Replace import() calls with window.importModule()
+  html = html.replace(/import\("([^"]+)"\)/g, 'window.importModule("$1")');
 
   // Insert module script before closing head tag
   html = html.replace('</head>', moduleScript + '\n</head>');
