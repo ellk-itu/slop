@@ -6,19 +6,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const buildDir = path.join(__dirname, 'build');
 const indexPath = path.join(buildDir, 'index.html');
 
-function resolveImportPath(fromPath, importSpecifier) {
-  // If it's not a relative import, return as-is
-  if (!importSpecifier.startsWith('.')) {
-    return importSpecifier;
-  }
-
-  // Get the directory of the current module
-  const fromDir = path.dirname(fromPath);
-  
-  // Resolve the relative path
-  const resolved = path.normalize(path.join(fromDir, importSpecifier));
-  
-  // Convert to forward slashes and ensure it starts with /
+function resolveRelativePath(basePath, relPath) {
+  const baseDir = path.dirname(basePath);
+  const resolved = path.normalize(path.join(baseDir, relPath));
   return '/' + resolved.replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
@@ -39,7 +29,7 @@ function inlineAssets() {
     return match;
   });
 
-  // Collect all JS files
+  // Collect all JS files and rewrite imports
   const jsFiles = [];
   function collectJsFiles(dir) {
     const files = fs.readdirSync(dir);
@@ -53,28 +43,23 @@ function inlineAssets() {
         const relativePath = path.relative(buildDir, filePath).replace(/\\/g, '/');
         const modulePath = '/' + relativePath;
         
-        // Rewrite relative imports to absolute paths
+        // Rewrite all relative imports to absolute paths
+        // Handle: import { x } from "./file" (all quote styles)
         content = content.replace(
-          /from\s+["']([^"']+)["']/g,
-          (match, importPath) => {
-            const resolved = resolveImportPath(modulePath, importPath);
-            return `from "${resolved}"`;
+          /from\s*(['"`])(\.[^'"`]+)\1/g,
+          (match, quote, relPath) => {
+            const absPath = resolveRelativePath(modulePath, relPath);
+            return `from${quote}${absPath}${quote}`;
           }
         );
         
-        // Also rewrite import() calls
+        // Handle: import("./file") with any quote style including backticks
         content = content.replace(
-          /import\s*\(\s*["']([^"']+)["']\s*\)/g,
-          (match, importPath) => {
-            const resolved = resolveImportPath(modulePath, importPath);
-            return `import("${resolved}")`;
+          /import\s*\(\s*['"`](\.[^'"`]+)['"`]\s*\)/g,
+          (match, relPath) => {
+            const absPath = resolveRelativePath(modulePath, relPath);
+            return `import("${absPath}")`;
           }
-        );
-        
-        // Replace absolute import calls with our loader
-        content = content.replace(
-          /import\("(\/[^"]+)"\)/g,
-          'window.importModule("$1")'
         );
         
         jsFiles.push({
@@ -138,8 +123,8 @@ function inlineAssets() {
   window.importModule = loadModule;
 </script>`;
 
-  // Replace remaining import() calls with window.importModule()
-  html = html.replace(/import\("([^"]+)"\)/g, 'window.importModule("$1")');
+  // Replace top-level import() calls with window.importModule()
+  html = html.replace(/import\("([^"]+)"\)(?=\s*\.then)/g, 'window.importModule("$1")');
 
   // Insert module script before closing head tag
   html = html.replace('</head>', moduleScript + '\n</head>');
