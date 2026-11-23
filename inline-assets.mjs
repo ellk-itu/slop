@@ -6,6 +6,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const buildDir = path.join(__dirname, 'build');
 const indexPath = path.join(buildDir, 'index.html');
 
+function resolveImportPath(fromPath, importSpecifier) {
+  // If it's not a relative import, return as-is
+  if (!importSpecifier.startsWith('.')) {
+    return importSpecifier;
+  }
+
+  // Get the directory of the current module
+  const fromDir = path.dirname(fromPath);
+  
+  // Resolve the relative path
+  const resolved = path.normalize(path.join(fromDir, importSpecifier));
+  
+  // Convert to forward slashes and ensure it starts with /
+  return '/' + resolved.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
 function inlineAssets() {
   console.log('Inlining assets into single HTML file...');
 
@@ -33,10 +49,36 @@ function inlineAssets() {
       if (stat.isDirectory()) {
         collectJsFiles(filePath);
       } else if (file.endsWith('.js')) {
-        const content = fs.readFileSync(filePath, 'utf-8');
+        let content = fs.readFileSync(filePath, 'utf-8');
         const relativePath = path.relative(buildDir, filePath).replace(/\\/g, '/');
+        const modulePath = '/' + relativePath;
+        
+        // Rewrite relative imports to absolute paths
+        content = content.replace(
+          /from\s+["']([^"']+)["']/g,
+          (match, importPath) => {
+            const resolved = resolveImportPath(modulePath, importPath);
+            return `from "${resolved}"`;
+          }
+        );
+        
+        // Also rewrite import() calls
+        content = content.replace(
+          /import\s*\(\s*["']([^"']+)["']\s*\)/g,
+          (match, importPath) => {
+            const resolved = resolveImportPath(modulePath, importPath);
+            return `import("${resolved}")`;
+          }
+        );
+        
+        // Replace absolute import calls with our loader
+        content = content.replace(
+          /import\("(\/[^"]+)"\)/g,
+          'window.importModule("$1")'
+        );
+        
         jsFiles.push({
-          path: '/' + relativePath,
+          path: modulePath,
           content: content
         });
       }
@@ -96,7 +138,7 @@ function inlineAssets() {
   window.importModule = loadModule;
 </script>`;
 
-  // Replace import() calls with window.importModule()
+  // Replace remaining import() calls with window.importModule()
   html = html.replace(/import\("([^"]+)"\)/g, 'window.importModule("$1")');
 
   // Insert module script before closing head tag
